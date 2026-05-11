@@ -677,7 +677,7 @@ class Experiment(object):
 
         return success
 
-    def set_use_instrument_calibration(self, use_inst):
+    def set_use_instrument_calibration(self, use_inst_cal):
         """
         If the instrument calibration constant varies between the experimental
         configuration and the one stored on the physical instrument, define
@@ -686,7 +686,7 @@ class Experiment(object):
 
         Parameters
         ----------
-        use_inst: bool
+        use_inst_cal: bool
            If True, use the calibration constant from the physical instrument.
            If False, use the calibration constant in the experimental method.
 
@@ -697,12 +697,13 @@ class Experiment(object):
         """
         success = False
 
-        if not isinstance(use_inst, bool) and not (use_inst == 1 or use_inst == 0):
+        if (not isinstance(use_inst_cal, bool)
+            and not (use_inst_cal == 1 or use_inst_cal == 0)):
             logger.error('Failed to set use instrument calibration for '
                 'experiment ID %s, value is not a boolean', self._exp_id)
 
         else:
-            if use_inst:
+            if use_inst_cal:
                 val = True
             else:
                 val = False
@@ -879,7 +880,7 @@ class WyattControl(object):
 
     def create_experiment(self, method, run_time=None, name=None,
         descrip=None, flow_rate=None, inj_vol=None, conc=None, dn_dc=None,
-        uv_ext=None, a2=None):
+        uv_ext=None, a2=None, use_inst_cal=None):
         """
         Creates a new Astra experiment for a standard method.
 
@@ -914,6 +915,12 @@ class WyattControl(object):
         a2: float
             The sample A2 coefficient in mol*mL/g^2. Optional. If not provided,
             the method default is retained.
+        use_inst_cal: bool
+            If True, use the physical instrument calibration value if it differs
+            from the experimental method configuration value. If False, use
+            the method value if the two differ.Optional. If not provided,
+            the physical instrument calibration value is used if there is a
+            difference.
 
         Returns
         -------
@@ -958,6 +965,9 @@ class WyattControl(object):
 
             if a2 is not None:
                 exp.set_A2(a2)
+
+            if use_inst_cal is not None:
+                exp.set_use_instrument_calibration(use_inst_cal)
 
         return exp_id, exp
 
@@ -1152,7 +1162,7 @@ if __name__ == '__main__':
     # Create a standard experiment
     exp_id, exp = wc.create_experiment('//dbf/User/Methods/LS+DLS+UV+dRI HPLC1 20240216',
         run_time=45, name='Sample1', descrip='My sample', flow_rate=0.6,
-        inj_vol=0.3, conc=0.12, dn_dc=0.185, uv_ext=1, a2=1)
+        inj_vol=0.3, conc=0.12, dn_dc=0.185, uv_ext=1, a2=1, use_inst_cal=True)
 
     valid, errors = wc.validate_experiemt(exp_id)
 
