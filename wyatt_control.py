@@ -126,7 +126,8 @@ class Experiment(object):
 
     def get_sample_name(self):
         """
-        Gets the experiment method sample name.
+        Gets the experiment method sample name. As seen in the experiment
+        Configuration Injector node.
 
         Returns
         -------
@@ -136,7 +137,7 @@ class Experiment(object):
         """
         try:
             with self.comm_lock:
-                val = self.astra.GetSampleName(self._exp_id)
+                val = str(self.astra.GetSampleName(self._exp_id))
         except Exception:
             logger.exception('Failed to get sample name for experiment ID %s.',
                 self._exp_id)
@@ -146,7 +147,8 @@ class Experiment(object):
 
     def get_sample_descrip(self):
         """
-        Gets the experiment method sample description.
+        Gets the experiment method sample description. As seen in the experiment
+        Configuration Injector node.
 
         Returns
         -------
@@ -156,7 +158,7 @@ class Experiment(object):
         """
         try:
             with self.comm_lock:
-                val = self.astra.GetSampleDescription(self._exp_id)
+                val = str(self.astra.GetSampleDescription(self._exp_id))
         except Exception:
             logger.exception('Failed to get sample description for experiment ID %s.',
                 self._exp_id)
@@ -331,7 +333,8 @@ class Experiment(object):
 
     def set_sample_name(self, name):
         """
-        Sets the experiment method sample description.
+        Sets the experiment method sample description. Gets set in the experiment
+        Configuration Injector node.
 
         Parameters
         ----------
@@ -366,7 +369,8 @@ class Experiment(object):
 
     def set_sample_descrip(self, descrip):
         """
-        Sets the experiment method sample description.
+        Sets the experiment method sample description. Gets set in the experiment
+        Configuration Injector node.
 
         Parameters
         ----------
@@ -539,6 +543,181 @@ class Experiment(object):
 
         return success
 
+    def get_experiment_name(self):
+        """
+        Gets the experiment name (e.g. as displayed in Astra).
+
+        Returns
+        -------
+        name: str
+           The experiment name. Returns None if an error occurs.
+        """
+        try:
+            with self.comm_lock:
+                val = str(self.astra.GetExperimentName(self._exp_id))
+        except Exception:
+            logger.exception('Failed to get experiment name for experiment ID %s.',
+                self._exp_id)
+            val = None
+
+        return val
+
+    def get_experiment_descrip(self):
+        """
+        Gets the experiment description. As seen in the top level configuration
+        node for the experiment.
+
+        Returns
+        -------
+        descrip: str
+           The experiment description. Returns None if an error occurs.
+        """
+        try:
+            with self.comm_lock:
+                val = self.astra.GetExperimentDescription(self._exp_id)
+        except Exception:
+            logger.exception('Failed to get experiment description for experiment ID %s.',
+                self._exp_id)
+            val = None
+
+        return val
+
+    def get_total_runtime(self):
+        """
+        Gets the experiment method total run time
+
+        Returns
+        -------
+        run_time: float
+           The experiment total run time in min. Returns None if an error
+           occurs.
+        """
+        try:
+            with self.comm_lock:
+                val = float(self.astra.GetCollectionDuration(self._exp_id))
+        except ValueError:
+            logger.exception('Failed to get total run time for experiment ID %s, '
+                'value is not a number.', self._exp_id)
+            val = None
+        except Exception:
+            logger.exception('Failed to get total run time for experiment ID %s.',
+                self._exp_id)
+            val = None
+
+        return val
+
+    def set_experiment_descrip(self, descrip):
+        """
+        Sets the experiment description. Shows up in the top level configuration
+        node for the experiment.
+
+        Parameters
+        ----------
+        descrip: str
+           The experiment description.
+
+        Returns
+        -------
+        success: bool
+            True if the value is successfully set.
+        """
+        try:
+            val = str(descrip)
+        except ValueError:
+            logger.exception('Failed to set experiment description for experiment '
+                'ID %s, value is not a string.', self._exp_id)
+            val = None
+
+        success = False
+
+        if val is not None:
+            try:
+                with self.comm_lock:
+                    self.astra.SetExperimentDescription(self._exp_id, val)
+                success = True
+            except Exception:
+                logger.exception('Failed to set experiment description for '
+                    'experiment ID %s.',
+                    self._exp_id)
+
+        return success
+
+    def set_total_runtime(self, run_time):
+        """
+        Sets the experiment method total run time.
+
+        Parameters
+        ----------
+        run_time: float
+           The experiment method total run time in min.
+
+        Returns
+        -------
+        success: bool
+            True if the value is successfully set.
+        """
+        try:
+            val = float(run_time)
+        except ValueError:
+            logger.exception('Failed to set total run time for experiment '
+                'ID %s, value is not a number.', self._exp_id)
+            val = None
+
+        success = False
+
+        if val is not None:
+            try:
+                with self.comm_lock:
+                    self.astra.SetCollectionDuration(self._exp_id, val)
+                success = True
+            except Exception:
+                logger.exception('Failed to set total run time for '
+                    'experiment ID %s.',
+                    self._exp_id)
+
+        return success
+
+    def set_use_instrument_calibration(self, use_inst):
+        """
+        If the instrument calibration constant varies between the experimental
+        configuration and the one stored on the physical instrument, define
+        whether the one in the experimental method or on the instrument should
+        be used. By default the one on the instrument is used.
+
+        Parameters
+        ----------
+        use_inst: bool
+           If True, use the calibration constant from the physical instrument.
+           If False, use the calibration constant in the experimental method.
+
+        Returns
+        -------
+        success: bool
+            True if the value is successfully set.
+        """
+        success = False
+
+        if not isinstance(use_inst, bool) and not (use_inst == 1 or use_inst == 0):
+            logger.error('Failed to set use instrument calibration for '
+                'experiment ID %s, value is not a boolean', self._exp_id)
+
+        else:
+            if use_inst:
+                val = True
+            else:
+                val = False
+
+            try:
+                with self.comm_lock:
+                    self.astra.UseInstrumentCalibrationConstant(self._exp_id, val)
+                success = True
+            except Exception:
+                logger.exception('Failed to set total run time for '
+                    'experiment ID %s.',
+                    self._exp_id)
+
+        return success
+
 class WyattControl(object):
     """
     """
@@ -698,8 +877,9 @@ class WyattControl(object):
         exp_id, exp = self._create_experiment(method)
         return exp_id, exp
 
-    def create_experiment(self, method, name=None, descrip=None, flow_rate=None,
-        inj_vol=None, conc=None, dn_dc=None, uv_ext=None, a2=None):
+    def create_experiment(self, method, run_time=None, name=None,
+        descrip=None, flow_rate=None, inj_vol=None, conc=None, dn_dc=None,
+        uv_ext=None, a2=None):
         """
         Creates a new Astra experiment for a standard method.
 
@@ -707,6 +887,9 @@ class WyattControl(object):
         ----------
         method: str
             The path to the method to be used, as returned by get_available_methods.
+        run_time: float
+            The method runtime in minutes. Optional. If not provided, the
+            method default is retained.
         name: str
             The sample name. Optional. If not provided, the method default
             is retained.
@@ -748,6 +931,9 @@ class WyattControl(object):
 
         if exp_id is not None:
             self._wait_for_exp_read(exp_id)
+
+            if run_time is not None:
+                exp.set_total_runtime(run_time)
 
             if name is not None:
                 exp.set_sample_name(name)
@@ -965,8 +1151,8 @@ if __name__ == '__main__':
     ###################################################
     # Create a standard experiment
     exp_id, exp = wc.create_experiment('//dbf/User/Methods/LS+DLS+UV+dRI HPLC1 20240216',
-        name='Sample1', descrip='My sample', flow_rate=0.6, inj_vol=0.3,
-        conc=0.12, dn_dc=0.185, uv_ext=1, a2=1)
+        run_time=45, name='Sample1', descrip='My sample', flow_rate=0.6,
+        inj_vol=0.3, conc=0.12, dn_dc=0.185, uv_ext=1, a2=1)
 
     valid, errors = wc.validate_experiemt(exp_id)
 
