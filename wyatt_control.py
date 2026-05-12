@@ -76,6 +76,102 @@ class Experiment(object):
     def get_method(self):
         return self._method
 
+    def _get_float_val(self, func, log_str):
+        try:
+            with self.comm_lock:
+                val = float(func(self._exp_id))
+        except ValueError:
+            logger.exception('Failed to get %s for experiment ID %s, '
+                'value is not a number.', log_str, self._exp_id)
+            val = None
+        except Exception:
+            logger.exception('Failed to get %s for experiment ID %s.',
+                log_str, self._exp_id)
+            val = None
+
+        return val
+
+    def _get_str_val(self, func, log_str):
+        try:
+            with self.comm_lock:
+                val = str(func(self._exp_id))
+        except ValueError:
+            logger.exception('Failed to get %s for experiment ID %s, '
+                'value is not a string.', log_str, self._exp_id)
+            val = None
+        except Exception:
+            logger.exception('Failed to get %s for experiment ID %s.',
+                log_str, self._exp_id)
+            val = None
+
+        return val
+
+    def _set_float_val(self, func, log_str, set_val):
+        try:
+            val = float(set_val)
+        except ValueError:
+            logger.exception('Failed to set %s for experiment ID %s, '
+                'value is not a number.', log_str, self._exp_id)
+            val = None
+
+        success = False
+
+        if val is not None:
+            try:
+                with self.comm_lock:
+                    func(self._exp_id, val)
+                success = True
+            except Exception:
+                logger.exception('Failed to set %s for experiment ID %s.',
+                    log_str, self._exp_id)
+
+        return success
+
+    def _set_str_val(self, func, log_str, set_val):
+        try:
+            val = str(set_val)
+        except ValueError:
+            logger.exception('Failed to set %s for experiment ID %s, '
+                'value is not a string.', log_str, self._exp_id)
+            val = None
+
+        success = False
+
+        if val is not None:
+            try:
+                with self.comm_lock:
+                    func(self._exp_id, val)
+                success = True
+            except Exception:
+                logger.exception('Failed to set %s for experiment ID %s.',
+                    log_str, self._exp_id)
+
+        return success
+
+    def _set_bool_val(self, func, log_str, set_val):
+        success = False
+
+        if (not isinstance(set_val, bool)
+            and not (set_val == 1 or set_val == 0)):
+            logger.error('Failed to set%s for experiment ID %s, value is '
+                'not a boolean', log_str, self._exp_id)
+
+        else:
+            if set_val:
+                val = True
+            else:
+                val = False
+
+            try:
+                with self.comm_lock:
+                    func(self._exp_id, val)
+                success = True
+            except Exception:
+                logger.exception('Failed to set %s for experiment ID %s.',
+                    log_str, self._exp_id)
+
+        return success
+
     def get_flow_rate(self):
         """
         Gets the experiment method flow rate.
@@ -86,17 +182,7 @@ class Experiment(object):
            The experiment method flow rate in mL/min. Returns None if
            the flow rate is not set or an error occurs.
         """
-        try:
-            with self.comm_lock:
-                val = float(self.astra.GetPumpFlowRate(self._exp_id))
-        except ValueError:
-            logger.exception('Failed to get flow rate for experiment ID %s, '
-                'value is not a number.', self._exp_id)
-            val = None
-        except Exception:
-            logger.exception('Failed to get flow rate for experiment ID %s.',
-                self._exp_id)
-            val = None
+        val = self._get_float_val(self.astra.GetPumpFlowRate, 'flow rate')
 
         return val
 
@@ -110,17 +196,7 @@ class Experiment(object):
            The experiment method injected volume in mL. Returns None if
            the injected volume is not set or an error occurs.
         """
-        try:
-            with self.comm_lock:
-                val = float(self.astra.GetInjectedVolume(self._exp_id))
-        except ValueError:
-            logger.exception('Failed to get injected volume for experiment ID %s, '
-                'value is not a number.', self._exp_id)
-            val = None
-        except Exception:
-            logger.exception('Failed to get injected volume for experiment ID %s.',
-                self._exp_id)
-            val = None
+        val = self._get_float_val(self.astra.GetInjectedVolume, 'injected volume')
 
         return val
 
@@ -135,13 +211,7 @@ class Experiment(object):
            The experiment method sample name. Returns None if
            an error occurs.
         """
-        try:
-            with self.comm_lock:
-                val = str(self.astra.GetSampleName(self._exp_id))
-        except Exception:
-            logger.exception('Failed to get sample name for experiment ID %s.',
-                self._exp_id)
-            val = None
+        val = self._get_str_val(self.astra.GetSampleName, 'sample name')
 
         return val
 
@@ -156,13 +226,8 @@ class Experiment(object):
            The experiment method sample description. Returns None if
            an error occurs.
         """
-        try:
-            with self.comm_lock:
-                val = str(self.astra.GetSampleDescription(self._exp_id))
-        except Exception:
-            logger.exception('Failed to get sample description for experiment ID %s.',
-                self._exp_id)
-            val = None
+        val = self._get_str_val(self.astra.GetSampleDescription,
+            'sample description')
 
         return val
 
@@ -176,17 +241,7 @@ class Experiment(object):
            The experiment method dn/dc in mL/g. Returns None if
            the dn/dc is not set or an error occurs.
         """
-        try:
-            with self.comm_lock:
-                val = float(self.astra.GetSampleDndc(self._exp_id))
-        except ValueError:
-            logger.exception('Failed to get dn/dc for experiment ID %s, '
-                'value is not a number.', self._exp_id)
-            val = None
-        except Exception:
-            logger.exception('Failed to get dn/dc for experiment ID %s.',
-                self._exp_id)
-            val = None
+        val = self._get_float_val(self.astra.GetSampleDndc, 'dn/dc')
 
         return val
 
@@ -200,17 +255,7 @@ class Experiment(object):
            The experiment method A2 in mol*mL/g^2. Returns None if
            the A2 value is not set or an error occurs.
         """
-        try:
-            with self.comm_lock:
-                val = float(self.astra.GetSampleA2(self._exp_id))
-        except ValueError:
-            logger.exception('Failed to get A2 for experiment ID %s, '
-                'value is not a number.', self._exp_id)
-            val = None
-        except Exception:
-            logger.exception('Failed to get A2 for experiment ID %s.',
-                self._exp_id)
-            val = None
+        val = self._get_float_val(self.astra.GetSampleA2, 'A2')
 
         return val
 
@@ -224,17 +269,8 @@ class Experiment(object):
            The experiment method UV extinction coefficient in mL/(g*cm).
            Returns None if the coefficient is not set or an error occurs.
         """
-        try:
-            with self.comm_lock:
-                val = float(self.astra.GetSampleUvExtinction(self._exp_id))
-        except ValueError:
-            logger.exception('Failed to get UV extinction coefficient for '
-                'experiment ID %s, value is not a number.', self._exp_id)
-            val = None
-        except Exception:
-            logger.exception('Failed to get UV extinction coefficient for '
-                'experiment ID %s.', self._exp_id)
-            val = None
+        val = self._get_float_val(self.astra.GetSampleUvExtinction,
+            'UV extinction coefficient')
 
         return val
 
@@ -248,17 +284,51 @@ class Experiment(object):
            The experiment method injected sample concentration in g/mL.
            Returns None if the coefficient is not set or an error occurs.
         """
-        try:
-            with self.comm_lock:
-                val = float(self.astra.GetSampleConcentration(self._exp_id))
-        except ValueError:
-            logger.exception('Failed to get injected sample concentration for '
-                'experiment ID %s, value is not a number.', self._exp_id)
-            val = None
-        except Exception:
-            logger.exception('Failed to get injected sample concentration for '
-                'experiment ID %s.', self._exp_id)
-            val = None
+        val = self._get_float_val(self.astra.GetSampleConcentration,
+            'sample concentration')
+
+        return val
+
+    def get_experiment_name(self):
+        """
+        Gets the experiment name (e.g. as displayed in Astra).
+
+        Returns
+        -------
+        name: str
+           The experiment name. Returns None if an error occurs.
+        """
+        val = self._get_str_val(self.astra.GetExperimentName, 'experiment name')
+
+        return val
+
+    def get_experiment_descrip(self):
+        """
+        Gets the experiment description. As seen in the top level configuration
+        node for the experiment.
+
+        Returns
+        -------
+        descrip: str
+           The experiment description. Returns None if an error occurs.
+        """
+        val = self._get_str_val(self.astra.GetExperimentDescription,
+            'experiment description')
+
+        return val
+
+    def get_total_runtime(self):
+        """
+        Gets the experiment method total run time
+
+        Returns
+        -------
+        run_time: float
+           The experiment total run time in min. Returns None if an error
+           occurs.
+        """
+        val = self._get_float_val(self.astra.GetCollectionDuration,
+            'total run time')
 
         return val
 
@@ -276,23 +346,8 @@ class Experiment(object):
         success: bool
             True if the value is successfully set.
         """
-        try:
-            val = float(flow_rate)
-        except ValueError:
-            logger.exception('Failed to set flow rate for experiment ID %s, '
-                'value is not a number.', self._exp_id)
-            val = None
-
-        success = False
-
-        if val is not None:
-            try:
-                with self.comm_lock:
-                    self.astra.SetPumpFlowRate(self._exp_id, val)
-                success = True
-            except Exception:
-                logger.exception('Failed to set flow rate for experiment ID %s.',
-                    self._exp_id)
+        success = self._set_float_val(self.astra.SetPumpFlowRate, 'flow rate',
+            flow_rate)
 
         return success
 
@@ -310,24 +365,8 @@ class Experiment(object):
         success: bool
             True if the value is successfully set.
         """
-        try:
-            val = float(inj_vol)
-        except ValueError:
-            logger.exception('Failed to set injected volume for experiment '
-                'ID %s, value is not a number.', self._exp_id)
-            val = None
-
-        success = False
-
-        if val is not None:
-            try:
-                with self.comm_lock:
-                    self.astra.SetInjectedVolume(self._exp_id, val)
-                success = True
-            except Exception:
-                logger.exception('Failed to set injected volume for '
-                    'experiment ID %s.',
-                    self._exp_id)
+        success = self._set_float_val(self.astra.SetInjectedVolume,
+            'injected volume', inj_vol)
 
         return success
 
@@ -346,24 +385,8 @@ class Experiment(object):
         success: bool
             True if the value is successfully set.
         """
-        try:
-            val = str(name)
-        except ValueError:
-            logger.exception('Failed to set sample name for experiment '
-                'ID %s, value is not a string.', self._exp_id)
-            val = None
-
-        success = False
-
-        if val is not None:
-            try:
-                with self.comm_lock:
-                    self.astra.SetSampleName(self._exp_id, val)
-                success = True
-            except Exception:
-                logger.exception('Failed to set sample name for '
-                    'experiment ID %s.',
-                    self._exp_id)
+        success = self._set_str_val(self.astra.SetSampleName, 'sample name',
+            name)
 
         return success
 
@@ -382,24 +405,8 @@ class Experiment(object):
         success: bool
             True if the value is successfully set.
         """
-        try:
-            val = str(descrip)
-        except ValueError:
-            logger.exception('Failed to set sample description for experiment '
-                'ID %s, value is not a string.', self._exp_id)
-            val = None
-
-        success = False
-
-        if val is not None:
-            try:
-                with self.comm_lock:
-                    self.astra.SetSampleDescription(self._exp_id, val)
-                success = True
-            except Exception:
-                logger.exception('Failed to set sample description for '
-                    'experiment ID %s.',
-                    self._exp_id)
+        success = self._set_str_val(self.astra.SetSampleDescription,
+            'sample description', descrip)
 
         return success
 
@@ -417,24 +424,7 @@ class Experiment(object):
         success: bool
             True if the value is successfully set.
         """
-        try:
-            val = float(dn_dc)
-        except ValueError:
-            logger.exception('Failed to set dn/dc for experiment '
-                'ID %s, value is not a number.', self._exp_id)
-            val = None
-
-        success = False
-
-        if val is not None:
-            try:
-                with self.comm_lock:
-                    self.astra.SetSampleDndc(self._exp_id, val)
-                success = True
-            except Exception:
-                logger.exception('Failed to set dn/dc for '
-                    'experiment ID %s.',
-                    self._exp_id)
+        success = self._set_float_val(self.astra.SetSampleDndc, 'dn/dc', dn_dc)
 
         return success
 
@@ -452,24 +442,7 @@ class Experiment(object):
         success: bool
             True if the value is successfully set.
         """
-        try:
-            val = float(a2)
-        except ValueError:
-            logger.exception('Failed to set A2 for experiment '
-                'ID %s, value is not a number.', self._exp_id)
-            val = None
-
-        success = False
-
-        if val is not None:
-            try:
-                with self.comm_lock:
-                    self.astra.SetSampleA2(self._exp_id, val)
-                success = True
-            except Exception:
-                logger.exception('Failed to set A2 for '
-                    'experiment ID %s.',
-                    self._exp_id)
+        success = self._set_float_val(self.astra.SetSampleA2, 'A2', a2)
 
         return success
 
@@ -487,24 +460,8 @@ class Experiment(object):
         success: bool
             True if the value is successfully set.
         """
-        try:
-            val = float(uv_ext)
-        except ValueError:
-            logger.exception('Failed to set UV extinction coefficient for '
-                'experiment ID %s, value is not a number.', self._exp_id)
-            val = None
-
-        success = False
-
-        if val is not None:
-            try:
-                with self.comm_lock:
-                    self.astra.SetSampleUvExtinction(self._exp_id, val)
-                success = True
-            except Exception:
-                logger.exception('Failed to set UV extinction coefficient '
-                    'for experiment ID %s.',
-                    self._exp_id)
+        success = self._set_float_val(self.astra.SetSampleUvExtinction,
+            'UV extinction coefficient', uv_ext)
 
         return success
 
@@ -522,89 +479,10 @@ class Experiment(object):
         success: bool
             True if the value is successfully set.
         """
-        try:
-            val = float(conc)
-        except ValueError:
-            logger.exception('Failed to set sample concentration for experiment '
-                'ID %s, value is not a number.', self._exp_id)
-            val = None
-
-        success = False
-
-        if val is not None:
-            try:
-                with self.comm_lock:
-                    self.astra.SetSampleConcentration(self._exp_id, val)
-                success = True
-            except Exception:
-                logger.exception('Failed to set sample concentration for '
-                    'experiment ID %s.',
-                    self._exp_id)
+        success = self._set_float_val(self.astra.SetSampleConcentration,
+            'sample concentration', conc)
 
         return success
-
-    def get_experiment_name(self):
-        """
-        Gets the experiment name (e.g. as displayed in Astra).
-
-        Returns
-        -------
-        name: str
-           The experiment name. Returns None if an error occurs.
-        """
-        try:
-            with self.comm_lock:
-                val = str(self.astra.GetExperimentName(self._exp_id))
-        except Exception:
-            logger.exception('Failed to get experiment name for experiment ID %s.',
-                self._exp_id)
-            val = None
-
-        return val
-
-    def get_experiment_descrip(self):
-        """
-        Gets the experiment description. As seen in the top level configuration
-        node for the experiment.
-
-        Returns
-        -------
-        descrip: str
-           The experiment description. Returns None if an error occurs.
-        """
-        try:
-            with self.comm_lock:
-                val = self.astra.GetExperimentDescription(self._exp_id)
-        except Exception:
-            logger.exception('Failed to get experiment description for experiment ID %s.',
-                self._exp_id)
-            val = None
-
-        return val
-
-    def get_total_runtime(self):
-        """
-        Gets the experiment method total run time
-
-        Returns
-        -------
-        run_time: float
-           The experiment total run time in min. Returns None if an error
-           occurs.
-        """
-        try:
-            with self.comm_lock:
-                val = float(self.astra.GetCollectionDuration(self._exp_id))
-        except ValueError:
-            logger.exception('Failed to get total run time for experiment ID %s, '
-                'value is not a number.', self._exp_id)
-            val = None
-        except Exception:
-            logger.exception('Failed to get total run time for experiment ID %s.',
-                self._exp_id)
-            val = None
-
-        return val
 
     def set_experiment_descrip(self, descrip):
         """
@@ -621,24 +499,8 @@ class Experiment(object):
         success: bool
             True if the value is successfully set.
         """
-        try:
-            val = str(descrip)
-        except ValueError:
-            logger.exception('Failed to set experiment description for experiment '
-                'ID %s, value is not a string.', self._exp_id)
-            val = None
-
-        success = False
-
-        if val is not None:
-            try:
-                with self.comm_lock:
-                    self.astra.SetExperimentDescription(self._exp_id, val)
-                success = True
-            except Exception:
-                logger.exception('Failed to set experiment description for '
-                    'experiment ID %s.',
-                    self._exp_id)
+        success = self._set_str_val(self.astra.SetExperimentDescription,
+            'experiment description', descrip)
 
         return success
 
@@ -656,24 +518,8 @@ class Experiment(object):
         success: bool
             True if the value is successfully set.
         """
-        try:
-            val = float(run_time)
-        except ValueError:
-            logger.exception('Failed to set total run time for experiment '
-                'ID %s, value is not a number.', self._exp_id)
-            val = None
-
-        success = False
-
-        if val is not None:
-            try:
-                with self.comm_lock:
-                    self.astra.SetCollectionDuration(self._exp_id, val)
-                success = True
-            except Exception:
-                logger.exception('Failed to set total run time for '
-                    'experiment ID %s.',
-                    self._exp_id)
+        success = self._set_float_val(self.astra.SetCollectionDuration,
+            'total run time', run_time)
 
         return success
 
@@ -695,27 +541,8 @@ class Experiment(object):
         success: bool
             True if the value is successfully set.
         """
-        success = False
-
-        if (not isinstance(use_inst_cal, bool)
-            and not (use_inst_cal == 1 or use_inst_cal == 0)):
-            logger.error('Failed to set use instrument calibration for '
-                'experiment ID %s, value is not a boolean', self._exp_id)
-
-        else:
-            if use_inst_cal:
-                val = True
-            else:
-                val = False
-
-            try:
-                with self.comm_lock:
-                    self.astra.UseInstrumentCalibrationConstant(self._exp_id, val)
-                success = True
-            except Exception:
-                logger.exception('Failed to set total run time for '
-                    'experiment ID %s.',
-                    self._exp_id)
+        success = self._set_bool_val(self.astra.UseInstrumentCalibrationConstant,
+            'use instrument calibration', use_inst_cal)
 
         return success
 
