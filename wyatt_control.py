@@ -53,11 +53,20 @@ except Exception:
     # logger.error('Failed to import the Wyatt DLLs!!')
     traceback.print_exc()
 
-class Status(Enum):
+class ExpStatus(Enum):
     NEW = 'Loading'
     READY = 'Ready'
+    PREPARE = 'Preparing for collection'
     WAIT_FOR_TRIG = 'Waiting for trigger'
     RUN = 'Running'
+    DONE = 'Done'
+
+class WyattStatus(Enum):
+    IDLE = 'Idle'
+    PREPARE = 'Preparing for collection'
+    WAIT_FOR_TRIG = 'Waiting for trigger'
+    RUNNING = 'Running'
+
 
 class Experiment(object):
     """
@@ -66,15 +75,54 @@ class Experiment(object):
         self.astra = astra
         self.comm_lock = comm_lock
         self._method = method
+        self._status = ExpStatus.NEW
 
         with self.comm_lock:
             self._exp_id = int(self.astra.NewExperimentFromTemplate(method))
 
     def get_exp_id(self):
+        """
+        Gets the experimental ID of the experiment.
+
+        Returns
+        -------
+        exp_id: int
+            The experimental ID
+        """
         return self._exp_id
 
     def get_method(self):
+        """
+        Gets the method template used to create the experiment.
+
+         Returns
+        -------
+        method: str
+            The full path to the method template.
+        """
         return self._method
+
+    def get_status(self):
+        """
+        Gets the experimental status.
+
+        Returns
+        -------
+        status: ExpStatus Enum
+            An ExpStatus Enum value
+        """
+        return self._status
+
+    def set_status(self, status):
+        """
+        Sets the experimental status.
+
+        Parameters
+        ----------
+        status: ExpStatus Enum
+           An ExpStatus Enum value.
+        """
+        self._status = status
 
     def _get_float_val(self, func, log_str):
         try:
@@ -99,6 +147,23 @@ class Experiment(object):
             logger.exception('Failed to get %s for experiment ID %s, '
                 'value is not a string.', log_str, self._exp_id)
             val = None
+        except Exception:
+            logger.exception('Failed to get %s for experiment ID %s.',
+                log_str, self._exp_id)
+            val = None
+
+        return val
+
+    def _get_bool_val(self, func, log_str):
+        try:
+            with self.comm_lock:
+                val = func(self._exp_id)
+
+                if val:
+                    val = True
+                else:
+                    val = False
+
         except Exception:
             logger.exception('Failed to get %s for experiment ID %s.',
                 log_str, self._exp_id)
@@ -332,6 +397,48 @@ class Experiment(object):
 
         return val
 
+    def get_is_experiment_running(self):
+        """
+        Gets whether the experiment is running
+
+        Returns
+        -------
+        running: bool
+           True if the experiment is running
+        """
+        val = self._get_bool_val(self.astra.GetIsExperimentRunning,
+            'is experiment running')
+
+        return val
+
+    def get_has_collected_data(self):
+        """
+        Gets whether the experiment has collected data
+
+        Returns
+        -------
+        has_data: bool
+           True if the experiment has collected data
+        """
+        val = self._get_bool_val(self.astra.HasCollectedData,
+            'has collected data')
+
+        return val
+
+    def get_results(self):
+        """
+        Gets experiment results as an XML string
+
+        Returns
+        -------
+        results: str
+           XML string of experiment results
+        """
+        val = self._get_str_val(self.astra.GetResults,
+            'results')
+
+        return val
+
     def set_flow_rate(self, flow_rate):
         """
         Sets the experiment method flow rate.
@@ -546,6 +653,46 @@ class Experiment(object):
 
         return success
 
+    def set_autofind_baselines(self, auto):
+        """
+        Sets whether to automatically find the baselines for the experiment.
+
+        Parameters
+        ----------
+        auto: bool
+           If True, auto find baselines. If False, use whatever is set for
+           the experiment method.
+
+        Returns
+        -------
+        success: bool
+            True if the value is successfully set.
+        """
+        success = self._set_bool_val(self.astra.SetAutoAutofindBaselines,
+            'autofind baselines', auto)
+
+        return success
+
+    def set_autofind_peaks(self, auto):
+        """
+        Sets whether to automatically find the peaks for the experiment.
+
+        Parameters
+        ----------
+        auto: bool
+           If True, auto find peaks. If False, use whatever is set for
+           the experiment method.
+
+        Returns
+        -------
+        success: bool
+            True if the value is successfully set.
+        """
+        success = self._set_bool_val(self.astra.SetAutoAutofindPeaks,
+            'autofind peaks', auto)
+
+        return success
+
 class WyattControl(object):
     """
     """
@@ -559,8 +706,15 @@ class WyattControl(object):
         self._callback_queue = deque()
         self._callback_cmds = {
             'on_instrument'         : self._on_instrument,
-            'on_experiment_read'    : self._on_experiment_read,
-            'on_experiment_run'     : self._on_experiment_run,
+            'on_exp_read'           : self._on_exp_read,
+            'on_exp_run'            : self._on_exp_run,
+            'on_prepare_exp'        : self._on_prepare_exp,
+            'on_wait_for_trig'      : self._on_wait_for_trig,
+            'on_exp_start'          : self._on_exp_start,
+            'on_exp_abort'          : self._on_exp_abort,
+            'on_exp_stop'           : self._on_exp_stop,
+            'on_exp_close'          : self._on_exp_close,
+            'on_exp_write'          : self._on_exp_write,
             'on_generic'            : self._on_generic,
             }
 
@@ -569,10 +723,13 @@ class WyattControl(object):
         self._callback_thread.daemon = True
         self._callback_thread.start()
 
-        self.instrument_detected_evt = threading.Event()
+        self._instrument_detected_evt = threading.Event()
+        self._exp_saved_evt = threading.Event()
 
         self._exp_lock = threading.RLock()
         self._experiments = {}
+
+        self._running_exp = None
 
         self._connect(show_astra)
 
@@ -604,8 +761,15 @@ class WyattControl(object):
     def _connect_callbacks(self):
         with self.comm_lock:
             self.astra.InstrumentDetectionCompleted += self._on_instrument_callback
-            self.astra.ExperimentRead += self._on_experiment_read_callback
-            self.astra.ExperimentRun += self._on_experiment_run_callback
+            self.astra.ExperimentRead += self._on_exp_read_callback
+            self.astra.ExperimentRun += self._on_exp_run_callback
+            self.astra.PreparingForCollection += self._on_prepare_exp_callback
+            self.astra.WaitingForAutoInject += self._on_wait_for_trig_callback
+            self.astra.CollectionStarted += self._on_exp_start_callback
+            self.astra.CollectionAborted += self._on_exp_abort_callback
+            self.astra.CollectionFinished += self._on_exp_stop_callback
+            self.astra.ExperimentClosed += self._on_exp_close_callback
+            self.astra.ExperimentWrite += self._on_exp_write_callback
 
     def _on_generic_callback(self, *args, **kwargs):
         self._callback_queue.append(['on_generic', args, kwargs])
@@ -614,32 +778,107 @@ class WyattControl(object):
         print(source)
         print(args)
 
-        self.generic_data = [args, kwargs]
+        self._generic_data = [args, kwargs]
 
     def _on_instrument_callback(self, *args, **kwargs):
         self._callback_queue.append(['on_instrument', args ,kwargs])
 
     def _on_instrument(self, args, kwargs):
-        self.instrument_detected_evt.set()
+        self._instrument_detected_evt.set()
 
-    def _on_experiment_read_callback(self, *args, **kwargs):
-        self._callback_queue.append(['on_experiment_read', args ,kwargs])
+    def _on_exp_read_callback(self, *args, **kwargs):
+        self._callback_queue.append(['on_exp_read', args ,kwargs])
 
-    def _on_experiment_read(self, args, kwargs):
-        exp_id = args[0]
+    def _on_exp_read(self, args, kwargs):
+        exp_id = int(args[0])
         # Turns out this isn't useful because you need to wait for the
         # experiment run event triggered right after the read in order to
         # modify the experiment
 
-    def _on_experiment_run_callback(self, *args, **kwargs):
-        self._callback_queue.append(['on_experiment_run', args ,kwargs])
+    def _on_exp_run_callback(self, *args, **kwargs):
+        self._callback_queue.append(['on_exp_run', args ,kwargs])
 
-    def _on_experiment_run(self, args, kwargs):
-        exp_id = args[0]
+    def _on_exp_run(self, args, kwargs):
+        exp_id = int(args[0])
 
         with self._exp_lock:
-            if self._experiments[exp_id]['status'] == Status.NEW:
-                self._experiments[exp_id]['status'] = Status.READY
+            if self._experiments[exp_id]['exp'].get_status() == ExpStatus.NEW:
+                self._experiments[exp_id]['exp'].set_status(ExpStatus.READY)
+
+            elif self._experiments[exp_id]['exp'].get_status() == ExpStatus.RUN:
+                self._experiments[exp_id]['exp'].set_status(ExpStatus.DONE)
+                self._running_exp = None
+
+    def _on_prepare_exp_callback(self, *args, **kwargs):
+        self._callback_queue.append(['on_prepare_exp', args ,kwargs])
+
+    def _on_prepare_exp(self, args, kwargs):
+        exp_id = int(args[0])
+
+        with self._exp_lock:
+            self._experiments[exp_id]['exp'].set_status(ExpStatus.PREPARE)
+
+        self._running_exp = exp_id
+
+    def _on_wait_for_trig_callback(self, *args, **kwargs):
+        self._callback_queue.append(['on_wait_for_trig', args ,kwargs])
+
+    def _on_wait_for_trig(self, args, kwargs):
+        exp_id = int(args[0])
+
+        with self._exp_lock:
+            self._experiments[exp_id]['exp'].set_status(ExpStatus.WAIT_FOR_TRIG)
+
+        self._running_exp = exp_id
+
+    def _on_exp_start_callback(self, *args, **kwargs):
+        self._callback_queue.append(['on_exp_start', args ,kwargs])
+
+    def _on_exp_start(self, args, kwargs):
+        exp_id = int(args[0])
+
+        with self._exp_lock:
+            self._experiments[exp_id]['exp'].set_status(ExpStatus.RUN)
+
+        self._running_exp = exp_id
+        # More here !!!!!!!!!!!!!!!!
+
+    def _on_exp_abort_callback(self, *args, **kwargs):
+        self._callback_queue.append(['on_exp_abort', args ,kwargs])
+
+    def _on_exp_abort(self, args, kwargs):
+        exp_id = int(args[0])
+
+        # Needs testing, but I think that this doesn't matter because
+        # you need to wait for the ExperimentRun event after the experiment
+        # stops
+
+    def _on_exp_stop_callback(self, *args, **kwargs):
+        self._callback_queue.append(['on_exp_stop', args ,kwargs])
+
+    def _on_exp_stop(self, args, kwargs):
+        exp_id = int(args[0])
+
+        # Needs testing, but I think that this doesn't matter because
+        # you need to wait for the ExperimentRun event after the experiment
+        # stops
+
+    def _on_exp_close_callback(self, *args, **kwargs):
+        self._callback_queue.append(['on_exp_close', args ,kwargs])
+
+    def _on_exp_close(self, args, kwargs):
+        exp_id = int(args[0])
+
+        with self._exp_lock:
+            self._experiments.pop(exp_id)
+
+    def _on_exp_write_callback(self, *args, **kwargs):
+        self._callback_queue.append(['on_exp_write', args ,kwargs])
+
+    def _on_exp_write(self, args, kwargs):
+        exp_id = int(args[0])
+
+        self._exp_saved_evt.set()
 
     def _run_from_callback(self):
         while True:
@@ -662,8 +901,9 @@ class WyattControl(object):
 
     def _wait_for_instruments(self):
         logger.info('Waiting to detect instruments')
-        while not self.instrument_detected_evt.wait(1):
+        while not self._instrument_detected_evt.wait(1):
             pass
+        self._instrument_detected_evt.clear()
 
     def _get_methods(self):
         logger.info('Getting all experiment methods')
@@ -673,7 +913,8 @@ class WyattControl(object):
     def get_available_methods(self):
         """
         Returns a list of the available methods. Note that this list of methods
-        is only updated when the control object is started.
+        is only updated when the control object is started or when
+        refresh_available_methods is called.
 
         Returns
         -------
@@ -681,6 +922,12 @@ class WyattControl(object):
             A list of availble methods with the full method path.
         """
         return self.methods
+
+    def refresh_available_methods(self):
+        """
+        Refreshes the available experimental methods.
+        """
+        self._get_methods()
 
     def create_utility_experiment(self, method):
         """
@@ -707,7 +954,8 @@ class WyattControl(object):
 
     def create_experiment(self, method, run_time=None, name=None,
         descrip=None, flow_rate=None, inj_vol=None, conc=None, dn_dc=None,
-        uv_ext=None, a2=None, use_inst_cal=None):
+        uv_ext=None, a2=None, auto_baseline=None, auto_peaks=None,
+        use_inst_cal=None):
         """
         Creates a new Astra experiment for a standard method.
 
@@ -742,6 +990,12 @@ class WyattControl(object):
         a2: float
             The sample A2 coefficient in mol*mL/g^2. Optional. If not provided,
             the method default is retained.
+        auto_baseline: bool
+            If True, use the auto find baseline method. Optional. If not provided,
+            the method baselines are retained.
+        auto_peaks: bool
+            If True, use the auto find peaks method. Optional. If not provided,
+            the method baselines are retained.
         use_inst_cal: bool
             If True, use the physical instrument calibration value if it differs
             from the experimental method configuration value. If False, use
@@ -793,6 +1047,12 @@ class WyattControl(object):
             if a2 is not None:
                 exp.set_A2(a2)
 
+            if auto_baseline is not None:
+                exp.set_autofind_baselines(auto_baseline)
+
+            if auto_peaks is not None:
+                exp.set_autofind_peaks(auto_peaks)
+
             if use_inst_cal is not None:
                 exp.set_use_instrument_calibration(use_inst_cal)
 
@@ -817,7 +1077,6 @@ class WyattControl(object):
             with self._exp_lock:
                 self._experiments[exp_id] = {
                     'exp'       : exp,
-                    'status'    : Status.NEW,
                     }
 
         return exp_id, exp
@@ -846,10 +1105,11 @@ class WyattControl(object):
     def _wait_for_exp_read(self, exp_id):
         logger.debug('Waiting for experiment to be read/created')
         while True:
-            with self._exp_lock:
-                if self._experiments[exp_id]['status'] == Status.READY:
-                    break
             time.sleep(0.1)
+
+            with self._exp_lock:
+                if self._experiments[exp_id]['exp'].get_status() == ExpStatus.READY:
+                    break
 
     def validate_experiemt(self, exp_id):
         """
@@ -923,12 +1183,13 @@ class WyattControl(object):
         success: bool
             True if experiment started without errors.
         """
-        logger.info('Starting experiment with exp ID %s', exp_id)
+        logger.info('Starting experiment')
         exp_id, exp = self._check_exp_id(exp_id)
 
         success = False
 
         if exp is not None:
+            logger.debug('Starting experiment with exp ID %s', exp_id)
             try:
                 with self.comm_lock:
                     self.astra.StartCollection(exp_id)
@@ -937,15 +1198,184 @@ class WyattControl(object):
                 logger.exception('Error running Astra start collection method.')
 
 
-        # Waiting stuff goes here
+        if wait_for_autoinject:
+            self.__wait_for_exp_wait_trig(exp_id)
+
+        if wait_for_collection:
+            self._wait_for_exp_start(exp_id)
+
+        return success
+
+    def _wait_for_exp_wait_trig(self, exp_id):
+        logger.debug('Waiting for experiment to be waiting for trigger')
+        while True:
+            time.sleep(0.1)
+
+            with self._exp_lock:
+                if (self._experiments[exp_id]['exp'].get_status()
+                    == ExpStatus.WAIT_FOR_TRIG):
+                    break
+
+    def _wait_for_exp_start(self, exp_id):
+        logger.debug('Waiting for experiment to start collecting')
+        while True:
+            time.sleep(0.1)
+
+            with self._exp_lock:
+                if (self._experiments[exp_id]['exp'].get_status() == ExpStatus.RUN):
+                    break
+
+    def abort_experiment(self, exp_id=None):
+        """
+        Aborts an ongoing experiment.
+
+        Parameters
+        ----------
+        exp_id: int
+            The experimental id. Optional.  If no experiment ID is provided,
+            then the ID of the currently running experiment (if any) is used.
+
+        Returns
+        -------
+        success: bool
+            True if experiment aborted without errors. False if there were
+            errors or if no experiment was currently running.
+        """
+        logger.info('Aborting experiment')
+        if exp_id is None:
+            exp_id = self._running_exp
+
+        success = False
+
+        if exp_id is not None:
+            exp_id, exp = self._check_exp_id(exp_id)
+
+        if exp is not None:
+            logger.debug('Aborting experiment with exp ID %s', exp_id)
+            try:
+                with self.comm_lock:
+                    self.astra.StopCollection(exp_id)
+                success = True
+            except Exception:
+                logger.exception('Error running Astra stop collection method.')
+        else:
+            logger.error('No experiment ID provided, so no experiment was aborted.')
+
+        return success
+
+    def save_experiment(self, exp_id, fname, descrip=None):
+        """
+        Saves the experiment. Note that it is saved in .afe8 format and
+        that the file extension is automatically provided, so any existing
+        file extension will be stripped.
+
+        Parameters
+        ----------
+        exp_id: int
+            The experimental id.
+        fname: str
+            The full path to the save file.
+        descrip: str
+            A description saved with the experiment.
+
+        Returns
+        -------
+        success: bool
+            True if experiment saved without errors.
+        """
+        logger.info('Saving experiment')
+        success = False
+
+        if exp_id is not None:
+            exp_id, exp = self._check_exp_id(exp_id)
+
+        try:
+            fname = os.path.abspath(os.path.expanduser(str(fname)))
+            fname = os.path.splitext(fname)[0]
+        except Exception:
+            logger.exception('Invalid file name provided. Experiment will '
+                'not be saved.')
+            fname = None
+
+        if descrip is not None:
+            try:
+                descrip = str(descrip)
+            except Exception:
+                logger.exception('Description provided was not a string. '
+                    'Experiment will be saved without a description.')
+                descrip = None
+
+        if exp is not None and fname is not None:
+            logger.debug('Saving experiment %s to %s', exp_id, fname)
+            try:
+                with self.comm_lock:
+                    if descrip is None:
+                        self.astra.SaveExperiment(exp_id, fname)
+                    else:
+                        self.astra.SaveExperimentWithDescription(exp_id, fname, descrip)
+                success = True
+            except Exception:
+                logger.exception('Error running Astra save experiment method.')
+
+        if success:
+            self._wait_for_save()
+
+        return success
+
+    def _wait_for_save(self):
+        logger.debug('Waiting for file to save')
+        self._exp_saved_evt.clear()
+
+        while not  self._exp_saved_evt.wait(1):
+            pass
+
+        self._exp_saved_evt.clear()
+
+    def close_experiment(self, exp_id):
+        """
+        Saves the experiment.
+
+        Parameters
+        ----------
+        exp_id: int
+            The experimental id.
+
+        Returns
+        -------
+        success: bool
+            True if experiment closed without errors.
+        """
+        logger.info('Closing experiment')
+        success = False
+
+        if exp_id is not None:
+            exp_id, exp = self._check_exp_id(exp_id)
+
+        if exp is not None:
+            logger.debug('Closing experiment with exp ID %s', exp_id)
+            try:
+                with self.comm_lock:
+                    self.astra.CloseExperiment(exp_id)
+
+                success = True
+            except Exception:
+                logger.exception('Error running Astra close experiment method.')
 
         return success
 
     def _disconnect_callbacks(self):
+        logger.debug('Disconnecting callbacks')
         with self.comm_lock:
             self.astra.InstrumentDetectionCompleted -= self._on_instrument_callback
-            self.astra.ExperimentRead -= self._on_experiment_read_callback
-            self.astra.ExperimentRun -= self._on_experiment_run_callback
+            self.astra.ExperimentRead -= self._on_exp_read_callback
+            self.astra.ExperimentRun -= self._on_exp_run_callback
+            self.astra.PreparingForCollection -= self._on_prepare_exp_callback
+            self.astra.WaitingForAutoInject -= self._on_wait_for_trig_callback
+            self.astra.CollectionStarted -= self._on_exp_start_callback
+            self.astra.CollectionAborted -= self._on_exp_abort_callback
+            self.astra.CollectionFinished -= self._on_exp_stop_callback
+            self.astra.ExperimentClosed -= self._on_exp_close_callback
+            self.astra.ExperimentWrite -= self._on_exp_write_callback
 
     def close(self):
         logger.info('Closing Wyatt control')
@@ -1001,6 +1431,9 @@ if __name__ == '__main__':
     # success = wc.start_experiment(exp_id)
 
     # print(success)
+
+    # wc.save_experiment(exp_id, 'C:/Users/biocat/Documents/MALS/test/test')
+    # wc.close_experiment(exp_id)
 
     # try:
     #     while True:
