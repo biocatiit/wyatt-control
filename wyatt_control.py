@@ -28,6 +28,7 @@ from collections import deque
 import traceback
 import uuid
 from enum import Enum
+import copy
 
 import packaging.version as version
 
@@ -59,7 +60,7 @@ class WyattStatus(Enum):
     IDLE = 'Idle'
     PREPARE = 'Preparing for collection'
     WAIT_FOR_TRIG = 'Waiting for trigger'
-    RUNNING = 'Running'
+    RUN = 'Running'
 
 
 class Experiment(object):
@@ -103,9 +104,10 @@ class Experiment(object):
         Returns
         -------
         status: ExpStatus Enum
-            An ExpStatus Enum value
+            An ExpStatus Enum value. May be: NEW, READY, PREPARE, WAIT_FOR_TRIG,
+            RUN, DONE.
         """
-        return self._status
+        return copy.copy(self._status)
 
     def set_status(self, status):
         """
@@ -116,7 +118,11 @@ class Experiment(object):
         status: ExpStatus Enum
            An ExpStatus Enum value.
         """
-        self._status = status
+        if status in ExpStatus:
+            self._status = status
+        else:
+            logger.exception('Experimental status must be one of the ExpStatus '
+                'Enum values.')
 
     def _get_float_val(self, func, log_str):
         try:
@@ -725,6 +731,10 @@ class WyattControl(object):
 
         self._running_exp = None
 
+        self._method_start_time = -1.
+        self._method_total_time = -1.
+        self._status = WyattStatus.IDLE
+
         self._connect(show_astra)
 
     def _connect(self, show_astra):
@@ -816,6 +826,9 @@ class WyattControl(object):
             elif self._experiments[exp_id]['exp'].get_status() == ExpStatus.RUN:
                 self._experiments[exp_id]['exp'].set_status(ExpStatus.DONE)
                 self._running_exp = None
+                self._method_start_time = -1
+                self._method_total_time = -1
+                self._status = WyattStatus.IDLE
 
     def _on_prepare_exp_callback(self, *args, **kwargs):
         self._callback_queue.append(['on_prepare_exp', args ,kwargs])
@@ -825,6 +838,8 @@ class WyattControl(object):
 
         with self._exp_lock:
             self._experiments[exp_id]['exp'].set_status(ExpStatus.PREPARE)
+
+        self._status = WyattStatus.PREPARE
 
         self._running_exp = exp_id
 
@@ -837,16 +852,22 @@ class WyattControl(object):
         with self._exp_lock:
             self._experiments[exp_id]['exp'].set_status(ExpStatus.WAIT_FOR_TRIG)
 
+        self._status = WyattStatus.WAIT_FOR_TRIG
+
         self._running_exp = exp_id
 
     def _on_exp_start_callback(self, *args, **kwargs):
         self._callback_queue.append(['on_exp_start', args ,kwargs])
 
     def _on_exp_start(self, args, kwargs):
+        self._method_start_time = time.monotonic()
+
         exp_id = int(args[0])
 
         with self._exp_lock:
             self._experiments[exp_id]['exp'].set_status(ExpStatus.RUN)
+
+        self._status = WyattStatus.RUN
 
         self._running_exp = exp_id
         # More here !!!!!!!!!!!!!!!!
@@ -936,6 +957,26 @@ class WyattControl(object):
         Refreshes the available experimental methods.
         """
         self._get_methods()
+
+    def instruments_detected(self):
+        """
+        Returns whether the instrument detection is complete. Shouldn't be used
+        on initial startup to wait for instrument detection.
+
+        Returns
+        -------
+        det: bool
+            True if instruments have been detected successfully.
+        """
+        with self.comm_lock:
+            val = self.astra.InstrumentsDetected()
+
+        if val:
+            det = True
+        else:
+            det = False
+
+        return det
 
     def create_utility_experiment(self, method):
         """
@@ -1202,6 +1243,7 @@ class WyattControl(object):
                 with self.comm_lock:
                     self.astra.StartCollection(exp_id)
                 success = True
+                self._method_total_time = exp.get_total_runtime()*60
             except Exception:
                 logger.exception('Error running Astra start collection method.')
 
@@ -1339,6 +1381,112 @@ class WyattControl(object):
 
         self._exp_saved_evt.clear()
 
+    def save_results(self, exp_id, fname):
+        """
+        Saves the results in XML format. A .xml file extension is automatically
+        added.
+
+        Parameters
+        ----------
+        exp_id: int
+            The experimental id.
+        fname: str
+            The full path to the save file.
+
+        Returns
+        -------
+        success: bool
+            True if experiment saved without errors.
+        """
+        logger.info('Saving results as XML')
+        success = False
+
+        if exp_id is not None:
+            exp_id, exp = self._check_exp_id(exp_id)
+
+        try:
+            fname = os.path.abspath(os.path.expanduser(str(fname)))
+            fname = os.path.splitext(fname)[0]+'.xml'
+        except Exception:
+            logger.exception('Invalid file name provided. Experiment results will '
+                'not be saved.')
+            fname = None
+
+        if exp is not None and fname is not None:
+            logger.debug('Saving experiment %s results to %s', exp_id, fname)
+            try:
+                with self.comm_lock:
+                    self.astra.SaveResults(exp_id, fname)
+
+                success = True
+            except Exception:
+                logger.exception('Error running Astra save experiment results method.')
+
+        return success
+
+    def get_elapsed_runtime(self):
+        """
+        Returns elapsed run time for the current acquisition. Note that if no
+        acquisition is running the run time returned is -1.
+
+        Returns
+        -------
+        run_time: float
+            The elapsed run time for the current acquisition in minutes.
+        """
+        if self._method_start_time != -1:
+            run_time = (time.monotonic()-self._method_start_time)/60.
+        else:
+            run_time = -1
+
+        return run_time
+
+    def get_remaining_runtime(self):
+        """
+        Returns remaining run time for the current acquisition. Note that if no
+        acquisition is running the run time returned is -1.
+
+        Returns
+        -------
+        run_time: float
+            The remaining run time for the current acquisition in minutes.
+        """
+        if self._method_start_time != -1:
+            elapsed = time.monotonic()-self._method_start_time
+            run_time = (self._method_total_time - elapsed)/60.
+        else:
+            run_time = -1.
+
+        return run_time
+
+    def get_total_runtime(self):
+        """
+        Returns the elapsed run time for the instrument. Note that if no
+        acquisition is running the run time returned is -1.
+
+        Returns
+        -------
+        run_time: float
+            The total run time for the current acquisition in minutes.
+        """
+        if self._method_total_time != -1:
+            run_time = self._method_total_time/60
+        else:
+            run_time = -1
+
+        return run_time
+
+    def get_status(self):
+        """
+        Returns status as a WyattStatus Enum value.
+
+        Returns
+        -------
+        status: WyattStatus Enum
+            The instrument status. May be: IDLE, PREPARE, WAIT_FOR_TRIG, RUN.
+        """
+        return copy.copy(self._status)
+
     def close_experiment(self, exp_id):
         """
         Saves the experiment.
@@ -1427,7 +1575,8 @@ if __name__ == '__main__':
     # Create a standard experiment
     exp_id, exp = wc.create_experiment('//dbf/User/Methods/LS+DLS+UV+dRI HPLC1 20240216',
         run_time=45, name='Sample1', descrip='My sample', flow_rate=0.6,
-        inj_vol=0.3, conc=0.12, dn_dc=0.185, uv_ext=1, a2=1, use_inst_cal=True)
+        inj_vol=0.3, conc=0.12, dn_dc=0.185, uv_ext=1, a2=1, auto_baseline=True,
+        auto_peaks=True, use_inst_cal=True)
 
     valid, errors = wc.validate_experiemt(exp_id)
 
@@ -1441,6 +1590,7 @@ if __name__ == '__main__':
     # print(success)
 
     # wc.save_experiment(exp_id, 'C:/Users/biocat/Documents/MALS/test/test')
+    # wc.save_results(exp_id, 'C:/Users/biocat/Documents/MALS/test/test_results')
     # wc.close_experiment(exp_id)
 
     # try:
