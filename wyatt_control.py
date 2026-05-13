@@ -20,25 +20,19 @@
 #    along with this software.  If not, see <http://www.gnu.org/licenses/>.
 
 import os
-import glob
 import time
-import datetime
 import logging
 import sys
 import threading
 from collections import deque
 import traceback
-import copy
-import pathlib
-import functools
 import uuid
 from enum import Enum
 
+import packaging.version as version
+
 if __name__ != '__main__':
     logger = logging.getLogger(__name__)
-
-import numpy as np
-
 
 try:
     import clr
@@ -49,7 +43,7 @@ try:
 
 except Exception:
     # Note: the try/except is just to enable building documentation on systems
-    # without the agilent dlls
+    # without the wyatt dlls
     # logger.error('Failed to import the Wyatt DLLs!!')
     traceback.print_exc()
 
@@ -737,14 +731,28 @@ class WyattControl(object):
 
         with self.comm_lock:
             self.astra = AstraLib.Astra()
+            if not self.astra.IsEmbedded():
+                raise RuntimeError('Astra was started normally. Astra must be '
+                    'closed before starting wyatt control, so that Astra can '
+                    'be opened in COM mode.')
+            if not '00000000-0000-0000-0000-000000000000' == self.astra.GetAutomationUid():
+                raise RuntimeError('Astra was started by another program. Astra '
+                    'must be closed before starting wyatt control, so that '
+                    'Astra can be opened in COM mode.')
 
         logger.info('Starting Astra')
-        pid = os.getpid()
-        guid = str(uuid.uuid4())
+        self._pid = os.getpid()
+        self._guid = str(uuid.uuid4())
 
         with self.comm_lock:
-            self.astra.SetAutomationIdentity('WyattControl', '0.1', pid,
-                guid, True, [])
+            self.astra.SetAutomationIdentity('WyattControl', '0.1', self._pid,
+                self._guid, True, [])
+
+        min_astra_version = version.Version('8.1.1')
+        astra_version = version.parse(self.astra.GetVersion())
+        if astra_version < min_astra_version:
+            raise RuntimeError('Astra version must be at least 8.1.1 to use '
+                'wyatt control.')
 
         self._connect_callbacks()
 
