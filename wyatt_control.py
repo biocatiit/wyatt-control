@@ -55,6 +55,7 @@ class ExpStatus(Enum):
     WAIT_FOR_TRIG = 'Waiting for trigger'
     RUN = 'Running'
     DONE = 'Done'
+    ABORT = 'Aborted'
 
 class WyattStatus(Enum):
     IDLE = 'Idle'
@@ -105,7 +106,7 @@ class Experiment(object):
         -------
         status: ExpStatus Enum
             An ExpStatus Enum value. May be: NEW, READY, PREPARE, WAIT_FOR_TRIG,
-            RUN, DONE.
+            RUN, DONE, ABORT.
         """
         return copy.copy(self._status)
 
@@ -874,6 +875,11 @@ class WyattControl(object):
 
     def _on_exp_abort_callback(self, *args, **kwargs):
         self._callback_queue.append(['on_exp_abort', args ,kwargs])
+        self._experiments[exp_id]['exp'].set_status(ExpStatus.ABORT)
+        self._running_exp = None
+        self._method_start_time = -1
+        self._method_total_time = -1
+        self._status = WyattStatus.IDLE
 
     def _on_exp_abort(self, args, kwargs):
         exp_id = int(args[0])
@@ -937,7 +943,7 @@ class WyattControl(object):
     def _get_methods(self):
         logger.info('Getting all experiment methods')
         with self.comm_lock:
-            self.methods = self.astra.GetExperimentTemplates()
+            self.methods = list(self.astra.GetExperimentTemplates())
 
     def get_available_methods(self):
         """
@@ -1141,7 +1147,7 @@ class WyattControl(object):
         if exp_id is not None:
             with self._exp_lock:
                 if exp_id in self._experiments:
-                    exp = self._experiments[exp_id]
+                    exp = self._experiments[exp_id]['exp']
                 else:
                     logger.error('Experiment ID %s is not an active experiment, '
                         'experiment.', exp_id)
@@ -1249,7 +1255,7 @@ class WyattControl(object):
 
 
         if wait_for_autoinject:
-            self.__wait_for_exp_wait_trig(exp_id)
+            self._wait_for_exp_wait_trig(exp_id)
 
         if wait_for_collection:
             self._wait_for_exp_start(exp_id)
@@ -1573,9 +1579,9 @@ if __name__ == '__main__':
 
     ###################################################
     # Create a standard experiment
-    exp_id, exp = wc.create_experiment('//dbf/User/Methods/LS+DLS+UV+dRI HPLC1 20240216',
-        run_time=45, name='Sample1', descrip='My sample', flow_rate=0.6,
-        inj_vol=0.3, conc=0.12, dn_dc=0.185, uv_ext=1, a2=1, auto_baseline=True,
+    exp_id, exp = wc.create_experiment('//dbf/Method Builder/BioCAT/SEC_MALS_SAXS_20260314',
+        run_time=3, name='Sample1', descrip='My sample', flow_rate=0.6,
+        inj_vol=0.3, conc=0.12, dn_dc=0.18, uv_ext=1, a2=1, auto_baseline=True,
         auto_peaks=True, use_inst_cal=True)
 
     valid, errors = wc.validate_experiemt(exp_id)
@@ -1585,7 +1591,7 @@ if __name__ == '__main__':
     print('Errors:')
     print(errors)
 
-    # success = wc.start_experiment(exp_id)
+    success = wc.start_experiment(exp_id, wait_for_collection=True)
 
     # print(success)
 
