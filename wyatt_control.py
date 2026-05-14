@@ -1365,6 +1365,22 @@ class WyattControl(object):
                 if (exp.get_status() == ExpStatus.RUN):
                     break
 
+    def _wait_for_exp_end(self, exp_id):
+        logger.debug('Waiting for experiment to finish collecting')
+        while True:
+            time.sleep(0.1)
+
+            with self._exp_lock:
+                exp_val = self._experiments.get(exp_id)
+                if exp_val is None:
+                    logger.warning("Experiment %s closed during wait", exp_id)
+                    return
+
+                exp = exp_val['exp']
+
+                if (exp.get_status() in [ExpStatus.DONE, ExpStatus.ABORT]):
+                    break
+
     def abort_experiment(self, exp_id=None):
         """
         Aborts an ongoing experiment.
@@ -1513,6 +1529,66 @@ class WyattControl(object):
                 logger.exception('Error running Astra save experiment results method.')
 
         return success
+
+    def extend_exp_runtime(self, time):
+        """
+        Extends the run time of the currently running experiment.
+
+        Parameters
+        ----------
+        time: float
+            Time in minutes to extend experimental run time.
+
+        Returns
+        -------
+        success: bool
+            True if experiment run time was extended without errors.
+        """
+        try:
+            time = float(time)
+        except Exception:
+            logger.error('Run time must be a number')
+            time = None
+
+        success = False
+
+        if time is not None:
+            with self._exp_lock:
+                exp_id = self._running_exp
+
+                if exp_id is not None:
+                    exp_val = self._experiments.get(exp_id)
+                    if exp_val is None:
+                        logger.error("Running event %s is missing, cannot "
+                            "extend run time", exp_id)
+                        return False
+
+                    exp = exp_val['exp']
+
+                    cur_runtime = exp.get_total_runtime()
+                    new_runtime = cur_runtime + time
+                    success = exp.set_total_runtime(new_runtime)
+
+                    if success:
+                        self._method_total_time = new_runtime*60
+
+                else:
+                    logger.error('No experiment is running, cannot extend '
+                        'run time')
+
+        return success
+
+    def wait_for_exp_end(self):
+        """
+        Waits for the experiment to end.
+        """
+        with self._exp_lock:
+            exp_id = self._running_exp
+
+        if exp_id is not None:
+            self._wait_for_exp_end(exp_id)
+        else:
+            logger.error('No currently running experiment found.')
 
     def get_elapsed_runtime(self):
         """
@@ -1681,7 +1757,7 @@ if __name__ == '__main__':
     print('Errors:')
     print(errors)
 
-    success = wc.start_experiment(exp_id, wait_for_collection=True)
+    success = wc.start_experiment(exp_id)
 
     # print(success)
 
