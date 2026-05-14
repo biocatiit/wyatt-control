@@ -25,7 +25,6 @@ import logging
 import sys
 import threading
 from collections import deque
-import traceback
 import uuid
 from enum import Enum
 import copy
@@ -45,8 +44,7 @@ try:
 except Exception:
     # Note: the try/except is just to enable building documentation on systems
     # without the wyatt dlls
-    # logger.error('Failed to import the Wyatt DLLs!!')
-    traceback.print_exc()
+    logger.exception('Failed to import Wyatt DLL (AstraLib)')
 
 class ExpStatus(Enum):
     NEW = 'Loading'
@@ -63,6 +61,18 @@ class WyattStatus(Enum):
     WAIT_FOR_TRIG = 'Waiting for trigger'
     RUN = 'Running'
 
+exp_valid_transitions = {
+    ExpStatus.NEW       : [ExpStatus.READY],
+    ExpStatus.READY     : [ExpStatus.PREPARE, ExpStatus.WAIT_FOR_TRIG,
+                            ExpStatus.RUN, ExpStatus.DONE, ExpStatus.ABORT],
+    ExpStatus.PREPARE   : [ExpStatus.WAIT_FOR_TRIG, ExpStatus.RUN,
+                            ExpStatus.DONE, ExpStatus.ABORT],
+    ExpStatus.WAIT_FOR_TRIG   : [ExpStatus.RUN, ExpStatus.DONE,
+                                ExpStatus.ABORT],
+    ExpStatus.RUN       : [ExpStatus.DONE, ExpStatus.ABORT],
+    ExpStatus.DONE      : [],
+    ExpStatus.ABORT     : [],
+    }
 
 class Experiment(object):
     """
@@ -72,6 +82,8 @@ class Experiment(object):
         self.comm_lock = comm_lock
         self._method = method
         self._status = ExpStatus.NEW
+
+        self._status_lock = threading.RLock()
 
         with self.comm_lock:
             self._exp_id = int(self.astra.NewExperimentFromTemplate(method))
@@ -108,7 +120,8 @@ class Experiment(object):
             An ExpStatus Enum value. May be: NEW, READY, PREPARE, WAIT_FOR_TRIG,
             RUN, DONE, ABORT.
         """
-        return copy.copy(self._status)
+        with self._status_lock:
+            return copy.copy(self._status)
 
     def set_status(self, status):
         """
@@ -120,7 +133,12 @@ class Experiment(object):
            An ExpStatus Enum value.
         """
         if status in ExpStatus:
-            self._status = status
+            with self._status_lock:
+                if status not in exp_valid_transitions[self._status]:
+                    logger.warning('Invalid status change from %s to %s for exp %s',
+                        self._status, status, self._exp_id)
+                else:
+                    self._status = status
         else:
             logger.exception('Experimental status must be one of the ExpStatus '
                 'Enum values.')
@@ -219,7 +237,7 @@ class Experiment(object):
 
         if (not isinstance(set_val, bool)
             and not (set_val == 1 or set_val == 0)):
-            logger.error('Failed to set%s for experiment ID %s, value is '
+            logger.error('Failed to set %s for experiment ID %s, value is '
                 'not a boolean', log_str, self._exp_id)
 
         else:
@@ -744,11 +762,11 @@ class WyattControl(object):
             self.astra = AstraLib.Astra()
             if not self.astra.IsEmbedded():
                 raise RuntimeError('Astra was started normally. Astra must be '
-                    'closed before starting wyatt control, so that Astra can '
+                    'closed before starting Wyatt control, so that Astra can '
                     'be opened in COM mode.')
             if not '00000000-0000-0000-0000-000000000000' == self.astra.GetAutomationUid():
                 raise RuntimeError('Astra was started by another program. Astra '
-                    'must be closed before starting wyatt control, so that '
+                    'must be closed before starting Wyatt control, so that '
                     'Astra can be opened in COM mode.')
 
         logger.info('Starting Astra')
@@ -763,7 +781,7 @@ class WyattControl(object):
         astra_version = version.parse(self.astra.GetVersion())
         if astra_version < min_astra_version:
             raise RuntimeError('Astra version must be at least 8.1.1 to use '
-                'wyatt control.')
+                'Wyatt control.')
 
         self._connect_callbacks()
 
@@ -775,7 +793,7 @@ class WyattControl(object):
 
         self._get_methods()
 
-        logger.info('Waytt control started')
+        logger.info('Wyatt control started')
 
     def _connect_callbacks(self):
         with self.comm_lock:
@@ -794,8 +812,8 @@ class WyattControl(object):
         self._callback_queue.append(['on_generic', args, kwargs])
 
     def _on_generic(self, args, kwargs):
-        print(source)
         print(args)
+        print(kwargs)
 
         self._generic_data = [args, kwargs]
 
@@ -821,11 +839,18 @@ class WyattControl(object):
         exp_id = int(args[0])
 
         with self._exp_lock:
-            if self._experiments[exp_id]['exp'].get_status() == ExpStatus.NEW:
-                self._experiments[exp_id]['exp'].set_status(ExpStatus.READY)
+            exp_val = self._experiments.get(exp_id)
+            if exp_val is None:
+                logger.debug("Ignoring event for missing experiment %s", exp_id)
+                return
 
-            elif self._experiments[exp_id]['exp'].get_status() == ExpStatus.RUN:
-                self._experiments[exp_id]['exp'].set_status(ExpStatus.DONE)
+            exp = exp_val['exp']
+            status = exp.get_status()
+            if status == ExpStatus.NEW:
+                exp.set_status(ExpStatus.READY)
+
+            elif status == ExpStatus.RUN:
+                exp.set_status(ExpStatus.DONE)
                 self._running_exp = None
                 self._method_start_time = -1
                 self._method_total_time = -1
@@ -838,11 +863,18 @@ class WyattControl(object):
         exp_id = int(args[0])
 
         with self._exp_lock:
-            self._experiments[exp_id]['exp'].set_status(ExpStatus.PREPARE)
+            exp_val = self._experiments.get(exp_id)
+            if exp_val is None:
+                logger.debug("Ignoring event for missing experiment %s", exp_id)
+                return
 
-        self._status = WyattStatus.PREPARE
+            exp = exp_val['exp']
 
-        self._running_exp = exp_id
+            exp.set_status(ExpStatus.PREPARE)
+
+            self._running_exp = exp_id
+
+            self._status = WyattStatus.PREPARE
 
     def _on_wait_for_trig_callback(self, *args, **kwargs):
         self._callback_queue.append(['on_wait_for_trig', args ,kwargs])
@@ -851,42 +883,63 @@ class WyattControl(object):
         exp_id = int(args[0])
 
         with self._exp_lock:
-            self._experiments[exp_id]['exp'].set_status(ExpStatus.WAIT_FOR_TRIG)
+            exp_val = self._experiments.get(exp_id)
+            if exp_val is None:
+                logger.debug("Ignoring event for missing experiment %s", exp_id)
+                return
 
-        self._status = WyattStatus.WAIT_FOR_TRIG
+            exp = exp_val['exp']
 
-        self._running_exp = exp_id
+            exp.set_status(ExpStatus.WAIT_FOR_TRIG)
+
+            self._running_exp = exp_id
+
+            self._status = WyattStatus.WAIT_FOR_TRIG
+
 
     def _on_exp_start_callback(self, *args, **kwargs):
         self._callback_queue.append(['on_exp_start', args ,kwargs])
 
     def _on_exp_start(self, args, kwargs):
-        self._method_start_time = time.monotonic()
-
         exp_id = int(args[0])
 
         with self._exp_lock:
-            self._experiments[exp_id]['exp'].set_status(ExpStatus.RUN)
+            self._method_start_time = time.monotonic()
 
-        self._status = WyattStatus.RUN
+            exp_val = self._experiments.get(exp_id)
+            if exp_val is None:
+                logger.debug("Ignoring event for missing experiment %s", exp_id)
+                return
 
-        self._running_exp = exp_id
-        # More here !!!!!!!!!!!!!!!!
+            exp = exp_val['exp']
+
+            exp.set_status(ExpStatus.RUN)
+
+            self._running_exp = exp_id
+
+            self._status = WyattStatus.RUN
 
     def _on_exp_abort_callback(self, *args, **kwargs):
         self._callback_queue.append(['on_exp_abort', args ,kwargs])
-        self._experiments[exp_id]['exp'].set_status(ExpStatus.ABORT)
-        self._running_exp = None
-        self._method_start_time = -1
-        self._method_total_time = -1
-        self._status = WyattStatus.IDLE
 
     def _on_exp_abort(self, args, kwargs):
         exp_id = int(args[0])
 
-        # Needs testing, but I think that this doesn't matter because
-        # you need to wait for the ExperimentRun event after the experiment
-        # stops
+        with self._exp_lock:
+            exp_val = self._experiments.get(exp_id)
+            if exp_val is None:
+                logger.debug("Ignoring event for missing experiment %s", exp_id)
+                return
+
+            exp = exp_val['exp']
+
+            exp.set_status(ExpStatus.ABORT)
+
+            self._running_exp = None
+
+            self._method_start_time = -1
+            self._method_total_time = -1
+            self._status = WyattStatus.IDLE
 
     def _on_exp_stop_callback(self, *args, **kwargs):
         self._callback_queue.append(['on_exp_stop', args ,kwargs])
@@ -905,6 +958,11 @@ class WyattControl(object):
         exp_id = int(args[0])
 
         with self._exp_lock:
+            exp_val = self._experiments.get(exp_id)
+            if exp_val is None:
+                logger.debug("Ignoring event for missing experiment %s", exp_id)
+                return
+
             self._experiments.pop(exp_id)
 
     def _on_exp_write_callback(self, *args, **kwargs):
@@ -916,23 +974,24 @@ class WyattControl(object):
         self._exp_saved_evt.set()
 
     def _run_from_callback(self):
-        while True:
-            if len(self._callback_queue) > 0:
+        while not self._callback_stop.is_set():
+            try:
                 cmd, args, kwargs = self._callback_queue.popleft()
-                try:
-                    self._callback_cmds[cmd](args, kwargs)
-                except Exception:
-                    msg = ("Wyatt callback thread failed to run command '%s' "
-                    "with args: %s and kwargs: %s" %(cmd,
-                        ', '.join(['{}'.format(a) for a in args]),
-                        ', '.join(['{}:{}'.format(kw, item) for kw, item in kwargs.items()])))
-                    logger.exception(msg)
-
-            else:
+            except IndexError:
                 time.sleep(0.1)
+                continue
 
-            if self._callback_stop.is_set():
-                break
+            try:
+                self._callback_cmds[cmd](args, kwargs)
+            except Exception:
+                msg = ("Wyatt callback thread failed to run command '%s' "
+                "with args: %s and kwargs: %s" %(cmd,
+                    ', '.join(['{}'.format(a) for a in args]),
+                    ', '.join(['{}:{}'.format(kw, item) for kw, item in kwargs.items()])))
+                logger.exception(msg)
+
+        if len(self._callback_queue) > 0:
+            logger.info('Discarding %s events during shutdown', len(self._callback_queue))
 
     def _wait_for_instruments(self):
         logger.info('Waiting to detect instruments')
@@ -1003,7 +1062,7 @@ class WyattControl(object):
             and allows getting/setting of the properties. Returns None
             if method is not a valid method.
         """
-        logger.info('Creating utility expeirment')
+        logger.info('Creating utility experiment')
         exp_id, exp = self._create_experiment(method)
         return exp_id, exp
 
@@ -1163,10 +1222,17 @@ class WyattControl(object):
             time.sleep(0.1)
 
             with self._exp_lock:
-                if self._experiments[exp_id]['exp'].get_status() == ExpStatus.READY:
+                exp_val = self._experiments.get(exp_id)
+                if exp_val is None:
+                    logger.warning("Experiment %s closed during wait", exp_id)
+                    return
+
+                exp = exp_val['exp']
+
+                if exp.get_status() == ExpStatus.READY:
                     break
 
-    def validate_experiemt(self, exp_id):
+    def validate_experiment(self, exp_id):
         """
         Validates experiment prior to data collection
 
@@ -1249,7 +1315,12 @@ class WyattControl(object):
                 with self.comm_lock:
                     self.astra.StartCollection(exp_id)
                 success = True
-                self._method_total_time = exp.get_total_runtime()*60
+                runtime = exp.get_total_runtime()
+                with self._exp_lock:
+                    if runtime is not None:
+                        self._method_total_time = runtime*60
+                    else:
+                        self._method_total_time = -1
             except Exception:
                 logger.exception('Error running Astra start collection method.')
 
@@ -1268,8 +1339,14 @@ class WyattControl(object):
             time.sleep(0.1)
 
             with self._exp_lock:
-                if (self._experiments[exp_id]['exp'].get_status()
-                    == ExpStatus.WAIT_FOR_TRIG):
+                exp_val = self._experiments.get(exp_id)
+                if exp_val is None:
+                    logger.warning("Experiment %s closed during wait", exp_id)
+                    return
+
+                exp = exp_val['exp']
+
+                if (exp.get_status() == ExpStatus.WAIT_FOR_TRIG):
                     break
 
     def _wait_for_exp_start(self, exp_id):
@@ -1278,7 +1355,14 @@ class WyattControl(object):
             time.sleep(0.1)
 
             with self._exp_lock:
-                if (self._experiments[exp_id]['exp'].get_status() == ExpStatus.RUN):
+                exp_val = self._experiments.get(exp_id)
+                if exp_val is None:
+                    logger.warning("Experiment %s closed during wait", exp_id)
+                    return
+
+                exp = exp_val['exp']
+
+                if (exp.get_status() == ExpStatus.RUN):
                     break
 
     def abort_experiment(self, exp_id=None):
@@ -1299,7 +1383,8 @@ class WyattControl(object):
         """
         logger.info('Aborting experiment')
         if exp_id is None:
-            exp_id = self._running_exp
+            with self._exp_lock:
+                exp_id = self._running_exp
 
         success = False
 
@@ -1363,6 +1448,8 @@ class WyattControl(object):
 
         if exp is not None and fname is not None:
             logger.debug('Saving experiment %s to %s', exp_id, fname)
+            self._exp_saved_evt.clear()
+
             try:
                 with self.comm_lock:
                     if descrip is None:
@@ -1380,12 +1467,9 @@ class WyattControl(object):
 
     def _wait_for_save(self):
         logger.debug('Waiting for file to save')
-        self._exp_saved_evt.clear()
 
         while not  self._exp_saved_evt.wait(1):
             pass
-
-        self._exp_saved_evt.clear()
 
     def save_results(self, exp_id, fname):
         """
@@ -1440,10 +1524,11 @@ class WyattControl(object):
         run_time: float
             The elapsed run time for the current acquisition in minutes.
         """
-        if self._method_start_time != -1:
-            run_time = (time.monotonic()-self._method_start_time)/60.
-        else:
-            run_time = -1
+        with self._exp_lock:
+            if self._method_start_time != -1:
+                run_time = (time.monotonic()-self._method_start_time)/60.
+            else:
+                run_time = -1
 
         return run_time
 
@@ -1457,11 +1542,12 @@ class WyattControl(object):
         run_time: float
             The remaining run time for the current acquisition in minutes.
         """
-        if self._method_start_time != -1:
-            elapsed = time.monotonic()-self._method_start_time
-            run_time = (self._method_total_time - elapsed)/60.
-        else:
-            run_time = -1.
+        with self._exp_lock:
+            if self._method_start_time != -1:
+                elapsed = time.monotonic()-self._method_start_time
+                run_time = (self._method_total_time - elapsed)/60.
+            else:
+                run_time = -1.
 
         return run_time
 
@@ -1475,10 +1561,11 @@ class WyattControl(object):
         run_time: float
             The total run time for the current acquisition in minutes.
         """
-        if self._method_total_time != -1:
-            run_time = self._method_total_time/60
-        else:
-            run_time = -1
+        with self._exp_lock:
+            if self._method_total_time != -1:
+                run_time = self._method_total_time/60
+            else:
+                run_time = -1
 
         return run_time
 
@@ -1491,7 +1578,8 @@ class WyattControl(object):
         status: WyattStatus Enum
             The instrument status. May be: IDLE, PREPARE, WAIT_FOR_TRIG, RUN.
         """
-        return copy.copy(self._status)
+        with self._exp_lock:
+            return copy.copy(self._status)
 
     def close_experiment(self, exp_id):
         """
@@ -1543,6 +1631,8 @@ class WyattControl(object):
         logger.info('Closing Wyatt control')
 
         self._disconnect_callbacks()
+        self._callback_stop.set()
+        self._callback_thread.join(5)
 
         with self.comm_lock:
             self.astra.RequestQuit()
@@ -1568,7 +1658,7 @@ if __name__ == '__main__':
     # print(exp_id)
     # print(exp)
 
-    # valid, errors = wc.validate_experiemt(exp_id)
+    # valid, errors = wc.validate_experiment(exp_id)
 
     # print(valid)
     # print(errors)
@@ -1584,7 +1674,7 @@ if __name__ == '__main__':
         inj_vol=0.3, conc=0.12, dn_dc=0.18, uv_ext=1, a2=1, auto_baseline=True,
         auto_peaks=True, use_inst_cal=True)
 
-    valid, errors = wc.validate_experiemt(exp_id)
+    valid, errors = wc.validate_experiment(exp_id)
 
     print('Valid:')
     print(valid)
