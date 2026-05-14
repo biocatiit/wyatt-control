@@ -103,7 +103,7 @@ class Experiment(object):
         """
         Gets the method template used to create the experiment.
 
-         Returns
+        Returns
         -------
         method: str
             The full path to the method template.
