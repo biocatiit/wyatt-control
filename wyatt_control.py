@@ -1566,8 +1566,10 @@ class WyattControl(object):
                     exp = exp_val['exp']
 
                     cur_runtime = exp.get_total_runtime()
-                    new_runtime = cur_runtime + time
-                    success = exp.set_total_runtime(new_runtime)
+
+                    if cur_runtime is not None:
+                        new_runtime = cur_runtime + time
+                        success = exp.set_total_runtime(new_runtime)
 
                     if success:
                         self._method_total_time = new_runtime*60
