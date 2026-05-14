@@ -67,7 +67,7 @@ exp_valid_transitions = {
                             ExpStatus.RUN, ExpStatus.DONE, ExpStatus.ABORT],
     ExpStatus.PREPARE   : [ExpStatus.WAIT_FOR_TRIG, ExpStatus.RUN,
                             ExpStatus.DONE, ExpStatus.ABORT],
-    ExpStatus.WAIT_FOR_TRIG   : [ExpStatus.RUN, ExpStatus.DONE,
+    ExpStatus.WAIT_FOR_TRIG   : [ExpStatus.PREPARE, ExpStatus.RUN, ExpStatus.DONE,
                                 ExpStatus.ABORT],
     ExpStatus.RUN       : [ExpStatus.DONE, ExpStatus.ABORT],
     ExpStatus.DONE      : [],
