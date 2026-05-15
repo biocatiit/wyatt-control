@@ -158,10 +158,13 @@ class Experiment(object):
 
         return val
 
-    def _get_str_val(self, func, log_str):
+    def _get_str_val(self, func, log_str, args=[]):
         try:
             with self.comm_lock:
-                val = str(func(self._exp_id))
+                if len(args) > 0:
+                    val = str(func(self._exp_id, *args))
+                else:
+                    val = str(func(self._exp_id))
         except ValueError:
             logger.exception('Failed to get %s for experiment ID %s, '
                 'value is not a string.', log_str, self._exp_id)
@@ -453,8 +456,28 @@ class Experiment(object):
         results: str
            XML string of experiment results
         """
-        val = self._get_str_val(self.astra.GetResults,
-            'results')
+        val = self._get_str_val(self.astra.GetResults, 'results')
+
+        return val
+
+    def get_dataset(self, dataset):
+        """
+        Gets dataset information given the input dataset id. These can be
+        defined for the experimental method, but default dataset ids that are
+        generally available are: 'masses vs volume', 'rms radius vs volume',
+        'raw data','' Rh vs. volume'.
+
+        Parameters
+        ----------
+        dataset: str
+           The dataset id.
+
+        Returns
+        -------
+        data: str
+            Dataset information as a single string, values delimited by comma.
+        """
+        val = self._get_str_val(self.astra.GetDataSet, 'dataset', [dataset,])
 
         return val
 
@@ -1530,6 +1553,54 @@ class WyattControl(object):
 
         return success
 
+    def save_dataset(self, exp_id, fname, dataset):
+        """
+        Saves dataset information given the input dataset id. These can be
+        defined for the experimental method, but default dataset ids that are
+        generally available are: 'masses vs volume', 'rms radius vs volume',
+        'raw data','' Rh vs. volume'. A .csv file extension is automatically
+        appended.
+
+        Parameters
+        ----------
+        exp_id: int
+            The experimental id.
+        fname: str
+            The full path to the save file.
+        dataset: str
+           The dataset id.
+
+        Returns
+        -------
+        success: bool
+            True if experiment saved without errors.
+        """
+        logger.info('Saving datset "%s" as csv', dataset)
+        success = False
+
+        if exp_id is not None:
+            exp_id, exp = self._check_exp_id(exp_id)
+
+        try:
+            fname = os.path.abspath(os.path.expanduser(str(fname)))
+            fname = os.path.splitext(fname)[0]+'.csv'
+        except Exception:
+            logger.exception('Invalid file name provided. Experiment results will '
+                'not be saved.')
+            fname = None
+
+        if exp is not None and fname is not None:
+            logger.debug('Saving experiment %s results to %s', exp_id, fname)
+            try:
+                with self.comm_lock:
+                    self.astra.SaveDataSet(exp_id, dataset, fname)
+
+                success = True
+            except Exception:
+                logger.exception('Error running Astra save dataset method.')
+
+        return success
+
     def extend_exp_runtime(self, time):
         """
         Extends the run time of the currently running experiment.
@@ -1759,7 +1830,7 @@ if __name__ == '__main__':
     print('Errors:')
     print(errors)
 
-    success = wc.start_experiment(exp_id)
+    # success = wc.start_experiment(exp_id)
 
     # print(success)
 
