@@ -51,7 +51,7 @@ wc.close()
 Documentation of available classes and methods is done via sphinx compatible
 docstrings and can be built in the docs folder.
 
-By default running experiments is not blocking. This is really designed to be
+By default running an experiment is not blocking. This is really designed to be
 integrated as part of a GUI where you periodically check the status of the
 running experiment, however for convenience various blocking methods (such as
 wait_for_exp_end) are provided to make it easy to run as a script as well.
