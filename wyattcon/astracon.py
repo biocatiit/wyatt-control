@@ -76,8 +76,21 @@ exp_valid_transitions = {
 
 class Experiment(object):
     """
+    Experiment class for ASTRA experiments.
     """
     def __init__(self, astra, comm_lock, method):
+        """
+        Parameters
+        ----------
+        astra:
+            The ASTRA class returned from calling AstraLib.Astra()
+        comm_lock: threading.RLock
+            A shared threading.RLock with the WyattControl class that is acquired
+            whenever the astra class is called.
+        method: string
+            The path to the method template that will be used to create the
+            experiment.
+        """
         self.astra = astra
         self.comm_lock = comm_lock
         self._method = method
@@ -737,8 +750,16 @@ class Experiment(object):
 
 class WyattControl(object):
     """
+    Manages control of ASTRA.
     """
     def __init__(self, show_astra=True):
+        """
+        Parameters
+        ----------
+        show_astra: bool
+            Whether the ASTRA GUI window should be shown when the control
+            is started.
+        """
         logger.info('Starting Wyatt control')
         self.comm_lock = threading.RLock()
 

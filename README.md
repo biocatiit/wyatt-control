@@ -29,7 +29,7 @@ exp_id, exp = wc.create_experiment('//dbf/Method Builder/BioCAT/SEC_MALS_SAXS_20
 # Validate the experiment
 valid, errors = wc.validate_experiment(exp_id)
 
-# Start the experiment and wait for data collection to finish (note, if wait_for_collection is false start_experiment won't block and you can do other things while it runs)
+# Start the experiment and wait for data collection to finish (note: if wait_for_collection is false start_experiment won't block and you can do other things while it runs)
 success = wc.start_experiment(exp_id, wait_for_collection=True)
 
 # Save the experiment and results and close the experiment
@@ -40,3 +40,5 @@ wc.close_experiment(exp_id)
 # Close the WyattControl. This closes ASTRA.
 wc.close()
 ```
+
+Documentation of available classes and methods is done via sphinx compatible docstrings and can be built in the docs folder.
