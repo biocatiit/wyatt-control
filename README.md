@@ -29,8 +29,11 @@ exp_id, exp = wc.create_experiment('//dbf/Method Builder/BioCAT/SEC_MALS_SAXS_20
 # Validate the experiment
 valid, errors = wc.validate_experiment(exp_id)
 
-# Start the experiment and wait for data collection to finish (note: if wait_for_collection is false start_experiment won't block and you can do other things while it runs)
+# Start the experiment and wait for data collection to start (note: if wait_for_collection is false start_experiment won't block and you can do other things while it runs)
 success = wc.start_experiment(exp_id, wait_for_collection=True)
+
+# Wait for the experiment to end
+wc.wait_for_exp_end()
 
 # Save the experiment and results and close the experiment
 wc.save_experiment(exp_id, 'C:/Users/biocat/Documents/MALS/test/test')
