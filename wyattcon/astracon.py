@@ -1259,9 +1259,6 @@ class WyattControl(object):
         """
         Validates experiment prior to data collection
 
-        Maybe doesn't work for utility methods? Test on a real method to see if
-        this is working
-
         Parameters
         ----------
         exp_id: int
