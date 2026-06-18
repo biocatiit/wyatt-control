@@ -15,7 +15,7 @@ Python dependencies:
 ## Usage:
 
 ASTRA must be closed before you start the python control. It will open ASTRA on
-it's own. While the python control is running, You should not interact with
+its own. While the python control is running, You should not interact with
 ASTRA by any means besides the python control, otherwise you may lock up ASTRA.
 
 ```python
