@@ -14,7 +14,9 @@ Python dependencies:
 
 ## Usage:
 
-ASTRA must be closed before you start the python control. It will open ASTRA on it's own. While the python control is running, You should not interact with ASTRA by any means besides the python control, otherwise you may lock up ASTRA.
+ASTRA must be closed before you start the python control. It will open ASTRA on
+it's own. While the python control is running, You should not interact with
+ASTRA by any means besides the python control, otherwise you may lock up ASTRA.
 
 ```python
 # Create the WyattControl object. This starts ASTRA.
@@ -46,4 +48,10 @@ wc.close_experiment(exp_id)
 wc.close()
 ```
 
-Documentation of available classes and methods is done via sphinx compatible docstrings and can be built in the docs folder.
+Documentation of available classes and methods is done via sphinx compatible
+docstrings and can be built in the docs folder.
+
+By default running experiments is not blocking. This is really designed to be
+integrated as part of a GUI where you periodically check the status of the
+running experiment, however for convenience various blocking methods (such as
+wait_for_exp_end) are provided to make it easy to run as a script as well.
